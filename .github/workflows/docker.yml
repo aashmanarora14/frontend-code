@@ -3,14 +3,14 @@ name: Build Docker Image on EC2
 on:
   push:
     branches:
-      - main  # Trigger the workflow on push to the main branch
+      - main
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the code from the repository
+      # Step 1: Checkout repository
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -18,7 +18,7 @@ jobs:
       - name: Install SSH client
         run: sudo apt-get install -y openssh-client
 
-      # Step 3: Add SSH key and set permissions
+      # Step 3: Store SSH key in ~/.ssh/deploy_key
       - name: Add SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.AWS_SSH_PRIVATE_KEY }}
@@ -27,54 +27,52 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      # Step 4: Add EC2 host to known_hosts to prevent SSH prompt
+      # ✅ Debug SSH key in workflow logs (NOT inside EC2 server)
+      - name: Debug SSH key (masked by GitHub automatically)
+        run: |
+          echo "===== SSH KEY LOADED FROM SECRET ====="
+          echo "${{ secrets.AWS_SSH_PRIVATE_KEY }}"
+          echo "======================================"
+
+      # Step 4: Add EC2 to known_hosts to avoid SSH prompt
       - name: Add EC2 host to known_hosts
         env:
           AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
-        run: |
-          ssh-keyscan -H $AWS_EC2_HOST >> ~/.ssh/known_hosts
+        run: ssh-keyscan -H $AWS_EC2_HOST >> ~/.ssh/known_hosts
 
-      # Step 5: SSH into EC2 instance, build Docker image, and push to Docker Hub
-      - name: SSH and Build Docker Image on EC2
+      # Step 5: SSH into EC2, build Docker image, push to DockerHub
+      - name: SSH to EC2 and Build Docker Image
         env:
           AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
           AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          ssh -i ~/.ssh/deploy_key $AWS_EC2_USER@$AWS_EC2_HOST << 'EOF'
-            # Update package list and install Docker if not already installed
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key $AWS_EC2_USER@$AWS_EC2_HOST << 'EOF'
             sudo apt-get update
-            sudo apt-get install -y docker.io
+            sudo apt-get install -y docker.io git
 
-            # Ensure Docker is running
-            sudo systemctl start docker
             sudo systemctl enable docker
+            sudo systemctl start docker
 
-            # Navigate to the application directory or create if doesn't exist
             mkdir -p /home/ubuntu/frontend-code
             cd /home/ubuntu/frontend-code
 
-            # Clone the latest code from GitHub repository
             if [ -d ".git" ]; then
               git pull origin main
             else
               git clone https://github.com/aashmanarora14/frontend-code .
             fi
 
-            # Build Docker image
             sudo docker build -t my-app-image .
 
-            # Log in to Docker Hub and push the image
             echo "$DOCKERHUB_TOKEN" | sudo docker login -u "$DOCKERHUB_USERNAME" --password-stdin
             sudo docker tag my-app-image:latest aashman1414/my-app-image:latest
             sudo docker push aashman1414/my-app-image:latest
-
-            # Log out from Docker Hub
             sudo docker logout
           EOF
 
-      # Step 6: Configure AWS credentials for ECR
+      # Step 6: Configure AWS Credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -82,25 +80,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 7: Log in to Amazon ECR
-      - name: Log in to Amazon ECR
+      # Step 7: Login to Amazon ECR
+      - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      # Step 8: Pull Docker image from Docker Hub
+      # Step 8: Pull Docker image from DockerHub
       - name: Pull Docker image from Docker Hub
         run: docker pull aashman1414/my-app-image:latest
 
-      # Step 9: Tag Docker image for ECR
+      # Step 9: Tag image for ECR
       - name: Tag Docker image for ECR
         run: |
           ECR_REPOSITORY_URI="${{ secrets.ECR_REPOSITORY_URI }}"
-          echo "ECR_REPOSITORY_URI: $ECR_REPOSITORY_URI"
-          docker tag aashman1414/my-app-image:latest $ECR_REPOSITORY_URI:latest
-
-      # Step 10: Push Docker image to Amazon ECR
-      - name: Push Docker image to Amazon ECR
-        run: |
-          ECR_REPOSITORY_URI="${{ secrets.ECR_REPOSITORY_URI }}"
-          echo "Pushing Docker image to: $ECR_REPOSITORY_URI:latest"
-          docker push $ECR_REPOSITORY_URI:latest
+          docker tag aashman141
